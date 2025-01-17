@@ -1,0 +1,15 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'digit-classifier-local'
+    static_configs:
+      - targets: ['localhost:8080']
+    metrics_path: '/metrics'
+    
+  - job_name: 'digit-classifier-fly'
+    static_configs:
+      - targets: ['digit-classifier.fly.dev']
+    metrics_path: '/metrics'
+    scheme: https 

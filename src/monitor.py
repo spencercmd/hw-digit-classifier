@@ -3,6 +3,9 @@ import webbrowser
 from pathlib import Path
 import time
 import logging
+from prometheus_client import Counter, Histogram, Info
+from functools import wraps
+from flask import request, g
 
 def start_tensorboard(logdir="logs/fit", port=6006):
     """
@@ -33,6 +36,63 @@ def start_tensorboard(logdir="logs/fit", port=6006):
     
     logging.info(f"TensorBoard is running at {url}")
     return tensorboard
+
+# Create metrics
+REQUEST_COUNT = Counter(
+    'flask_request_count', 'App Request Count',
+    ['method', 'endpoint', 'http_status']
+)
+
+REQUEST_LATENCY = Histogram(
+    'flask_http_request_duration_seconds',
+    'Flask Request Latency',
+    ['method', 'endpoint']
+)
+
+PREDICTION_COUNT = Counter(
+    'digit_prediction_count',
+    'Number of digit predictions made',
+    ['predicted_digit']
+)
+
+MODEL_INFO = Info('digit_classifier_model', 'Information about the digit classifier model')
+
+def start_request():
+    """Store request start time"""
+    g.start_time = time.time()
+
+def before_request(response):
+    """Update metrics before each request"""
+    if not hasattr(g, 'start_time'):
+        return response
+        
+    request_latency = time.time() - g.start_time
+    if request.endpoint:
+        REQUEST_LATENCY.labels(
+            method=request.method,
+            endpoint=request.endpoint
+        ).observe(request_latency)
+
+        REQUEST_COUNT.labels(
+            method=request.method,
+            endpoint=request.endpoint,
+            http_status=response.status_code
+        ).inc()
+    
+    return response
+
+def record_prediction(digit):
+    """Record a prediction in the metrics"""
+    PREDICTION_COUNT.labels(predicted_digit=str(digit)).inc()
+
+def set_model_info(model):
+    """Set information about the model in the metrics"""
+    config = model.get_config()
+    MODEL_INFO.info({
+        'type': 'CNN',
+        'layers': str(len(config['layers'])),
+        'optimizer': model.optimizer.__class__.__name__
+    })
 
 if __name__ == "__main__":
     logging.basicConfig(

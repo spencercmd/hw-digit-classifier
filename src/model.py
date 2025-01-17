@@ -1,6 +1,10 @@
 import tensorflow as tf
 import numpy as np
 from datetime import datetime
+import os
+from pathlib import Path
+
+MODEL_PATH = Path("models/digit_classifier")
 
 def load_and_preprocess_data():
     """Loads and preprocesses the MNIST dataset.
@@ -17,13 +21,14 @@ def load_and_preprocess_data():
 
     return x_train, y_train, x_test, y_test
 
-def create_and_train_model(x_train, y_train, epochs=10):
+def create_and_train_model(x_train, y_train, epochs=10, save_model=True):
     """Creates and trains a neural network model.
 
     Args:
         x_train (numpy.array): Training data
         y_train (numpy.array): Training labels
         epochs (int, optional): Number of epochs to train for. Defaults to 10.
+        save_model (bool, optional): Whether to save the model after training. Defaults to True.
 
     Returns:
         tf.keras.Model: Trained neural network model.
@@ -82,7 +87,29 @@ def create_and_train_model(x_train, y_train, epochs=10):
         verbose=1
     )
     
+    if save_model:
+        save_trained_model(model)
+    
     return model
+
+def save_trained_model(model):
+    """Saves the trained model to disk.
+
+    Args:
+        model (tf.keras.Model): The trained model to save
+    """
+    MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    model.save(MODEL_PATH)
+
+def load_trained_model():
+    """Loads a trained model from disk.
+
+    Returns:
+        tf.keras.Model: The loaded model, or None if no saved model exists
+    """
+    if MODEL_PATH.exists():
+        return tf.keras.models.load_model(MODEL_PATH)
+    return None
 
 def predict(model, image_data):
     """Predicts the label of an input image.
