@@ -1,74 +1,33 @@
-# Digit Classifier API
+# Digit Classifier
 
-A machine learning API that classifies handwritten digits using a neural network trained on the MNIST dataset.
-
-## Project Structure
-
-```
-digit-classifier/
-├── src/                    # Application source code
-│   ├── app.py             # Flask application
-│   ├── model.py           # Neural network model
-│   └── monitor.py         # Monitoring utilities
-├── tests/                 # Test files
-│   └── test_app.py        # API tests
-├── docker/                # Docker-related files
-│   └── Dockerfile        # Main Dockerfile
-├── terraform/             # Infrastructure as Code
-│   ├── main.tf           # Main Terraform configuration
-│   ├── vpc.tf            # VPC configuration
-│   ├── ecs.tf            # ECS configuration
-│   ├── iam.tf            # IAM roles and policies
-│   ├── variables.tf      # Variable definitions
-│   └── outputs.tf        # Output definitions
-├── monitoring/           # Monitoring configuration
-│   ├── prometheus/       # Prometheus configuration
-│   └── grafana/         # Grafana dashboards
-├── scripts/             # Utility scripts
-├── .github/             # GitHub configuration
-│   └── workflows/       # GitHub Actions workflows
-├── docker-compose.yml   # Local development setup
-├── requirements.txt     # Python dependencies
-└── README.md           # Project documentation
-```
+A Flask application that uses TensorFlow to classify handwritten digits.
 
 ## Features
 
-- Handwritten digit classification using a neural network
-- Real-time predictions through REST API
-- Interactive drawing interface for digit input
-- Model performance monitoring with TensorBoard
-- Metrics collection with Prometheus
-- Visualization with Grafana
-- Containerized deployment with Docker
-- Infrastructure as Code with Terraform
-- CI/CD pipeline with GitHub Actions
-
-## Prerequisites
-
-- Python 3.10+
-- Docker and Docker Compose
-- AWS CLI configured with appropriate credentials
-- Terraform 1.0+
+- Handwritten digit classification using TensorFlow
+- Real-time predictions via REST API
+- TensorBoard integration for model monitoring
+- Prometheus metrics
+- Grafana dashboards
 
 ## Local Development
 
-1. Clone the repository:
+1. Create and activate a virtual environment:
    ```bash
-   git clone https://github.com/yourusername/digit-classifier.git
-   cd digit-classifier
+   python -m venv venv
+   source venv/bin/activate  # Linux/Mac
+   # or
+   .\venv\Scripts\activate  # Windows
    ```
 
-2. Create and activate a virtual environment:
-   ```bash
-   python -m venv env
-   source env/bin/activate  # Linux/macOS
-   .\env\Scripts\activate  # Windows
-   ```
-
-3. Install dependencies:
+2. Install dependencies:
    ```bash
    pip install -r requirements.txt
+   ```
+
+3. Run the application:
+   ```bash
+   python src/app.py
    ```
 
 4. Start the application with Docker Compose:
@@ -85,43 +44,65 @@ The application will be available at:
 ## Testing
 
 Run the test suite:
-```bash
+bash
 pytest tests/ --cov=src
-```
 
 ## Deployment
 
-1. Configure AWS credentials:
+### Prerequisites
+
+1. Install the Fly.io CLI:
    ```bash
-   aws configure
+   # Windows (PowerShell)
+   iwr https://fly.io/install.ps1 -useb | iex
+
+   # MacOS/Linux
+   curl -L https://fly.io/install.sh | sh
    ```
 
-2. Initialize Terraform:
+2. Login to Fly.io:
    ```bash
-   cd terraform
-   terraform init
+   fly auth login
    ```
 
-3. Deploy infrastructure:
+### Deploy the Application
+
+1. Launch the application (first time only):
    ```bash
-   terraform apply
+   fly launch
    ```
 
-4. Push Docker image:
-   ```powershell
-   .\scripts\push_image.ps1 -AWS_ACCOUNT_ID your-account-id -AWS_REGION your-region
+2. Deploy updates:
+   ```bash
+   fly deploy
    ```
 
-## Monitoring
+3. Scale the application (if needed):
+   ```bash
+   fly scale memory 512
+   fly scale vm shared-cpu-1x
+   ```
 
-### TensorBoard
+4. View application status:
+   ```bash
+   fly status
+   ```
+
+5. View application logs:
+   ```bash
+   fly logs
+   ```
+
+### Monitoring
+
+#### TensorBoard
 Access TensorBoard through the `/dashboard` endpoint to view:
 - Model architecture
 - Training metrics
 - Validation metrics
 - Real-time prediction accuracy
 
-### Prometheus & Grafana
+#### Prometheus & Grafana
 Monitor application metrics including:
 - Request rates
 - Response times
@@ -131,21 +112,13 @@ Monitor application metrics including:
 ## API Endpoints
 
 - `GET /`: Drawing interface for digit classification
-- `POST /predict`: Submit digit image for classification
+- `POST /predict`: Submit image for prediction
+- `GET /health`: Health check endpoint
 - `GET /dashboard`: TensorBoard dashboard
 - `GET /metrics`: Prometheus metrics
-- `GET /health`: Health check endpoint
 
-## Contributing
+## Environment Variables
 
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-    
+- `PORT`: Application port (default: 8080)
+- `FLASK_ENV`: Environment mode (development/production)
+- `LOG_LEVEL`: Logging level (default: INFO)
