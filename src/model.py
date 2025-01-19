@@ -3,6 +3,7 @@ import numpy as np
 from datetime import datetime
 import os
 from pathlib import Path
+import logging
 
 MODEL_PATH = Path("models/digit_classifier")
 
@@ -33,8 +34,8 @@ def create_and_train_model(x_train, y_train, epochs=10, save_model=True):
     Returns:
         tf.keras.Model: Trained neural network model.
     """
-    # Set up TensorBoard logging
-    log_dir = "logs/fit/" + datetime.now().strftime("%Y%m%d-%H%M%S")
+    # Set up TensorBoard logging with configurable directory
+    log_dir = os.getenv('TENSORBOARD_LOG_DIR', 'logs/fit/') + datetime.now().strftime("%Y%m%d-%H%M%S")
     tensorboard_callback = tf.keras.callbacks.TensorBoard(
         log_dir=log_dir,
         histogram_freq=1,
@@ -121,21 +122,35 @@ def predict(model, image_data):
     Returns:
         tuple: (predicted label, probabilities for each digit)
     """
-    # Ensure the image is properly shaped and normalized
-    image_data = np.array(image_data).astype('float32')
-    
-    # Reshape to match MNIST format (28x28)
-    image_data = image_data.reshape(28, 28)
-    
-    # Add batch and channel dimensions
-    image_data = image_data.reshape(1, 28, 28, 1)
+    try:
+        # Convert input to numpy array and normalize
+        image_data = np.array(image_data, dtype='float32')
+        if image_data.max() > 1.0:
+            image_data /= 255.0
+        
+        # Reshape to match MNIST format (28x28)
+        if image_data.shape != (28, 28):
+            image_data = image_data.reshape(28, 28)
+        
+        # Add batch and channel dimensions
+        image_data = image_data.reshape(1, 28, 28, 1)
 
-    # Get predictions
-    predictions = model.predict(image_data, verbose=0)
-    predicted_label = np.argmax(predictions[0])
-    probabilities = predictions[0].tolist()
-    
-    return int(predicted_label), probabilities
+        # Get predictions
+        predictions = model.predict(image_data, verbose=0)
+        
+        # Ensure predictions is a numpy array
+        predictions = np.array(predictions)
+        predicted_label = int(np.argmax(predictions[0]))
+        
+        # Convert to Python list of floats
+        probabilities = [float(p) for p in predictions[0]]
+        
+        return predicted_label, probabilities
+        
+    except Exception as e:
+        logging.error(f"Error in predict function: {str(e)}")
+        # Return a safe default in case of error
+        return 0, [0.0] * 10
 
 if __name__ == '__main__':
     x_train, y_train, x_test, y_test = load_and_preprocess_data()

@@ -18,4 +18,4 @@ RUN pip install --no-cache-dir -r requirements.prod.txt
 COPY . .
 
 # Run training script
-CMD ["python3", "scripts/train_model.py"] 
+CMD ["python3", "src/model.py"] 

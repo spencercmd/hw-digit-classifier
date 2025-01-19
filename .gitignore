@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyo
 *.so
 .Python
 env/
@@ -95,4 +96,7 @@ terraform.rc
 
 # System
 .DS_Store
-Thumbs.db 
+Thumbs.db
+
+# Node/NPM (if any JS code is present)
+node_modules/ 

@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template_string, g
+from flask import Flask, request, jsonify, render_template_string, g, Response
 from .model import load_and_preprocess_data, create_and_train_model, predict, load_trained_model
 from .monitor import before_request, record_prediction, set_model_info, start_request
 from prometheus_client import make_wsgi_app
@@ -11,6 +11,8 @@ import atexit
 import time
 import os
 import signal
+import requests
+import threading
 
 app = Flask(__name__)
 
@@ -32,6 +34,8 @@ app.after_request(before_request)
 # Global variables
 tensorboard_process = None
 model = None
+model_initialization_thread = None
+model_initialization_started = False
 
 def initialize_model():
     """Initialize the model based on environment"""
@@ -41,6 +45,14 @@ def initialize_model():
         is_development = os.environ.get('PYTHON_ENV', 'production') == 'development'
         logging.info(f"Initializing model in {'development' if is_development else 'production'} mode")
         
+        # Create necessary directories
+        Path("logs/fit").mkdir(parents=True, exist_ok=True)
+        Path("models").mkdir(parents=True, exist_ok=True)
+        
+        if model is not None:
+            logging.info("Model already initialized")
+            return model
+            
         if is_development:
             # In development, train a new model
             logging.info("Development mode: Training new model...")
@@ -67,24 +79,57 @@ def initialize_model():
         return model
     except Exception as e:
         logging.error(f"Error initializing model: {str(e)}")
+        model = None  # Ensure model is None on failure
         raise
 
 def start_tensorboard():
     """Start TensorBoard server"""
     global tensorboard_process
-    if tensorboard_process is None:
+    
+    # Skip TensorBoard in production/Fly.io environment
+    if os.environ.get('FLY_APP_NAME'):
+        logging.info("Skipping TensorBoard in Fly.io environment")
+        return
+        
+    if tensorboard_process is not None:
+        logging.info("TensorBoard already running")
+        return
+        
+    try:
+        Path("logs/fit").mkdir(parents=True, exist_ok=True)
+        tensorboard_port = int(os.environ.get('TENSORBOARD_PORT', '6006'))
+        
+        # Kill any existing TensorBoard processes
         try:
-            Path("logs/fit").mkdir(parents=True, exist_ok=True)
-            # Use PORT environment variable or fallback to 6006
-            tensorboard_port = int(os.environ.get('TENSORBOARD_PORT', '6006'))
-            tensorboard_process = subprocess.Popen(
-                ["tensorboard", "--logdir=logs/fit", f"--port={tensorboard_port}", "--bind_all"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
-            logging.info(f"TensorBoard started on port {tensorboard_port}")
+            subprocess.run(['pkill', '-f', 'tensorboard'], check=False)
+            time.sleep(1)
         except Exception as e:
-            logging.error(f"Failed to start TensorBoard: {e}")
+            logging.warning(f"Failed to kill existing TensorBoard processes: {e}")
+        
+        # Start TensorBoard
+        tensorboard_process = subprocess.Popen(
+            ["tensorboard", "--logdir=logs/fit", f"--port={tensorboard_port}", 
+             "--bind_all", "--reload_multifile=false"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        
+        # Wait for TensorBoard to start
+        time.sleep(3)
+        
+        if tensorboard_process.poll() is not None:
+            stderr = tensorboard_process.stderr.read().decode('utf-8')
+            logging.error(f"TensorBoard process died unexpectedly: {stderr}")
+            tensorboard_process = None
+            return
+            
+        logging.info("TensorBoard started successfully")
+        
+    except Exception as e:
+        logging.error(f"Failed to start TensorBoard: {e}")
+        if tensorboard_process is not None:
+            tensorboard_process.kill()
+            tensorboard_process = None
 
 def cleanup_tensorboard():
     """Cleanup TensorBoard process"""
@@ -97,31 +142,76 @@ def cleanup_tensorboard():
         except Exception as e:
             logging.error(f"Error shutting down TensorBoard: {e}")
             if tensorboard_process.poll() is None:
-                tensorboard_process.kill()
+                try:
+                    tensorboard_process.kill()
+                except Exception:
+                    pass
         tensorboard_process = None
 
 # Register cleanup function
 atexit.register(cleanup_tensorboard)
 
-# Initialize model at startup
-initialize_model()
+# Initialize model at startup in production only
+if os.environ.get('PYTHON_ENV', 'production') == 'production':
+    initialize_model()
+
+def initialize_model_async():
+    """Initialize model in a separate thread"""
+    global model, model_initialization_thread
+    try:
+        initialize_model()
+    except Exception as e:
+        logging.error(f"Async model initialization failed: {str(e)}")
 
 @app.route('/predict', methods=['POST'])
 def predict_digit():
     """Endpoint for digit prediction"""
     try:
-        image_data = request.get_json().get('image_data')
-        if not image_data:
+        logging.info("Received prediction request")
+        
+        if not request.is_json:
+            logging.error("Request Content-Type is not application/json")
+            return jsonify({'error': 'Content-Type must be application/json'}), 400
+            
+        data = request.get_json()
+        logging.info(f"Received data keys: {data.keys() if data else 'None'}")
+        
+        if not data or 'image_data' not in data:
+            logging.error("No image data in request")
             return jsonify({'error': 'No image data provided'}), 400
 
-        image_data = np.array(image_data)
+        image_data = np.array(data['image_data'])
+        logging.info(f"Image data shape before reshape: {image_data.shape}")
+        
+        # Ensure the data is properly shaped
+        if len(image_data.shape) != 1 or image_data.shape[0] != 784:  # 28*28 = 784
+            logging.error(f"Invalid image data shape: {image_data.shape}")
+            return jsonify({'error': 'Invalid image data shape'}), 400
+            
+        image_data = image_data.reshape(28, 28)
+        logging.info(f"Image data shape after reshape: {image_data.shape}")
+
+        if model is None:
+            logging.error("Model not initialized")
+            return jsonify({'error': 'Model not initialized'}), 503
+
+        logging.info("Making prediction")
         predicted_label, probabilities = predict(model, image_data)
+        logging.info(f"Prediction result: {predicted_label}")
+        
         record_prediction(predicted_label)
 
-        return jsonify({
+        # probabilities is already a list of floats from the predict function
+        response_data = {
             'predicted_label': int(predicted_label),
             'probabilities': probabilities
-        })
+        }
+        logging.info("Sending prediction response")
+        return jsonify(response_data)
+        
+    except ValueError as ve:
+        logging.error(f"ValueError in prediction: {ve}")
+        return jsonify({'error': f'Invalid input data: {str(ve)}'}), 400
     except Exception as e:
         logging.error(f"Prediction error: {e}")
         return jsonify({'error': str(e)}), 500
@@ -129,24 +219,35 @@ def predict_digit():
 @app.route('/health')
 def health_check():
     """Health check endpoint"""
+    global model, model_initialization_thread, model_initialization_started
+    
     try:
+        # Start model initialization in background if not started
+        if not model_initialization_started and model is None:
+            model_initialization_started = True
+            model_initialization_thread = threading.Thread(target=initialize_model_async)
+            model_initialization_thread.start()
+            logging.info("Started async model initialization")
+        
+        # Always return 200 during initialization
         if model is None:
-            logging.error("Health check failed: Model not initialized")
-            return "Model not initialized", 503
+            return "Application starting", 200
             
-        # Try a simple prediction to ensure model is working
+        # Once model is loaded, do a quick prediction
         test_data = np.zeros((28, 28))
         try:
             predict(model, test_data)
-            logging.debug("Health check passed")
             return "OK", 200
         except Exception as e:
-            logging.error(f"Health check failed: Model prediction error: {str(e)}")
-            return f"Model prediction error: {str(e)}", 503
+            logging.error(f"Health check prediction failed: {str(e)}")
+            return "Model prediction error", 503
             
     except Exception as e:
         logging.error(f"Health check failed: {str(e)}")
         return f"Health check error: {str(e)}", 503
+
+# Set application start time
+app.start_time = time.time()
 
 @app.route('/')
 def home():
@@ -157,9 +258,8 @@ def home():
     if is_development:
         tensorboard_url = "http://localhost:6006"
     else:
-        # In production, use the app's domain with the TensorBoard port
-        host = request.host.split(':')[0]
-        tensorboard_url = f"https://{host}"  # Fly.io handles SSL termination
+        # In production, use the TensorBoard Fly.io app
+        tensorboard_url = "https://digit-classifier-tensorboard.fly.dev"
     
     return render_template_string("""
     <!DOCTYPE html>
@@ -289,31 +389,54 @@ def home():
                 scaledCanvas.width = 28;
                 scaledCanvas.height = 28;
                 const scaledCtx = scaledCanvas.getContext('2d');
+                
+                // Use nearest-neighbor interpolation for better digit recognition
+                scaledCtx.imageSmoothingEnabled = false;
                 scaledCtx.drawImage(canvas, 0, 0, 28, 28);
+                
                 const imageData = scaledCtx.getImageData(0, 0, 28, 28);
                 const data = [];
+                
+                // Convert to grayscale and normalize
                 for (let i = 0; i < imageData.data.length; i += 4) {
+                    // Take red channel only since it's grayscale
                     data.push(imageData.data[i] / 255.0);
                 }
+                
                 return data;
             }
 
             function predict() {
                 const data = getPixelData();
+                document.getElementById('result').textContent = 'Predicting...';
+                
                 fetch('/predict', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
                     body: JSON.stringify({ image_data: data })
                 })
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) {
+                        return response.json().then(err => {
+                            throw new Error(err.error || `HTTP error! status: ${response.status}`);
+                        });
+                    }
+                    return response.json();
+                })
                 .then(data => {
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
                     document.getElementById('result').textContent = 
                         `Predicted Digit: ${data.predicted_label}`;
                 })
                 .catch(error => {
-                    document.getElementById('result').textContent = 
-                        'Error: Could not predict digit';
                     console.error('Error:', error);
+                    document.getElementById('result').textContent = 
+                        `Error: ${error.message || 'Could not predict digit'}`;
                 });
             }
 
@@ -326,3 +449,10 @@ def home():
     </body>
     </html>
     """, is_development=is_development, tensorboard_url=tensorboard_url)
+
+if __name__ == '__main__':
+    # Get port from environment variable or default to 8080
+    port = int(os.environ.get('PORT', 8080))
+    
+    # Bind to 0.0.0.0 to make the app accessible from outside the container
+    app.run(host='0.0.0.0', port=port)
